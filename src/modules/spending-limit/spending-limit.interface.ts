@@ -7,5 +7,5 @@ export interface ISpendingLimit {
   period: "monthly" | "weekly" | "daily";
   status: "active" | "inactive";
   startDate: Date;
-  endDate?: Date;
+  endDate: Date;
 }

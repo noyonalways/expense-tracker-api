@@ -1,86 +1,171 @@
+import PaginatedQueryBuilder from "@/builder/PaginatedQueryBuilder";
+import SingleDocQueryBuilder from "@/builder/SingleDocQueryBuilder";
+import { AppError } from "@/errors";
 import httpStatus from "http-status";
-import { Types } from "mongoose";
-
-import { IPaginationOptions } from "@/builder/interfaces/query.interface";
-import QueryBuilder from "@/builder/PaginatedQueryBuilder";
-import { IExpense, IExpenseFilters } from "./expense.interface";
+import { JwtPayload } from "jsonwebtoken";
+import mongoose from "mongoose";
+import { z } from "zod";
+import { Category } from "../category/category.model";
+import { SpendingLimit } from "./../spending-limit/spending-limit.model";
 import { Expense } from "./expense.model";
+import { ExpenseValidation } from "./expense.validation";
 
-const createExpense = async (expense: IExpense) => {
-  const newExpense = await Expense.create(expense);
-  return newExpense.populate("category");
-};
-
-const getExpenses = async (
-  filters: IExpenseFilters,
-  paginationOptions: IPaginationOptions = {},
+const create = async (
+  user: JwtPayload,
+  payload: z.infer<typeof ExpenseValidation.create>["body"],
 ) => {
-  const queryBuilder = new QueryBuilder<IExpense>(Expense, {
-    exact: ["userId", "category"],
-    range: ["date", "amount"],
+  const category = await Category.findById(payload.category);
+  if (!category) {
+    throw new AppError(httpStatus.NOT_FOUND, "Category not found");
+  }
+
+  // Get the current date
+  const currentDate = new Date();
+
+  // Check for existing spending limit for this category
+  const limit = await SpendingLimit.findOne({
+    user: user.id,
+    category: category._id,
+    startDate: { $lte: currentDate },
+    endDate: { $gte: currentDate },
+    status: "active",
   });
 
-  // Apply filters
-  const { user, startDate, endDate, category } = filters;
-  const filterOptions: Record<string, unknown> = { user };
-
-  if (startDate || endDate) {
-    if (startDate) filterOptions.dateStart = startDate;
-    if (endDate) filterOptions.dateEnd = endDate;
+  if (!limit) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      "No active spending limit found for this category. Please set a spending limit first.",
+    );
   }
 
-  if (category) {
-    filterOptions.category = category;
+  // Calculate total expenses for the spending limit period
+  const periodExpenses = await Expense.aggregate([
+    {
+      $match: {
+        user: user.id,
+        category: category._id,
+        date: {
+          $gte: limit.startDate,
+          $lte: limit.endDate,
+        },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        total: { $sum: "$amount" },
+      },
+    },
+  ]);
+
+  const currentTotal = periodExpenses.length > 0 ? periodExpenses[0].total : 0;
+  const newTotal = currentTotal + payload.amount;
+
+  // Check if this expense would exceed the spending limit
+  if (newTotal > limit.amount) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      `This expense would exceed your spending limit of ${limit.amount} for this category. Current total: ${currentTotal}. Period: ${limit.startDate.toLocaleDateString()} to ${limit.endDate.toLocaleDateString()}`,
+    );
   }
+
+  const expense = await Expense.create({
+    ...payload,
+    user: user.id,
+    category: category._id,
+    date: currentDate,
+  });
+
+  return expense.populate(["category", "user"]);
+};
+
+const getAll = async (user: JwtPayload, query: Record<string, unknown>) => {
+  const baseUrl = `/api/v1/expenses`;
+
+  const queryBuilder = new PaginatedQueryBuilder(
+    Expense.find({ user: user.id }),
+    query,
+    baseUrl,
+  );
 
   const result = await queryBuilder
-    .filter(filterOptions)
-    .paginate(paginationOptions)
-    .populate("category")
+    .filter()
+    .search()
+    .sort()
+    .selectFields()
+    .populateFields(["category", "user"])
+    .paginate()
     .execute();
 
   return result;
 };
 
-const getExpenseById = async (id: string) => {
-  const expense = await Expense.findById(id).populate("category");
+const getOne = async (
+  user: JwtPayload,
+  id: string,
+  query: Record<string, unknown>,
+) => {
+  const expense = await new SingleDocQueryBuilder(
+    Expense,
+    { _id: id, user: user.id },
+    query,
+  );
+
+  const result = await expense.populate(["category", "user"]).execute();
+
+  if (!result) {
+    throw new AppError(httpStatus.NOT_FOUND, "Expense not found");
+  }
+
+  return result;
+};
+
+const updateOne = async (
+  user: JwtPayload,
+  id: string,
+  payload: z.infer<typeof ExpenseValidation.update>["body"],
+) => {
+  const expense = await Expense.findOneAndUpdate(
+    { _id: id, user: user.id },
+    payload,
+    {
+      new: true,
+      runValidators: true,
+    },
+  ).populate("category");
+
+  if (!expense) {
+    throw new AppError(httpStatus.NOT_FOUND, "Expense not found");
+  }
+
   return expense;
 };
 
-const updateExpense = async (id: string, updateData: Partial<IExpense>) => {
-  const expense = await Expense.findByIdAndUpdate(id, updateData, {
-    new: true,
-    runValidators: true,
+const deleteOne = async (user: JwtPayload, id: string) => {
+  const expense = await Expense.findOneAndDelete({
+    _id: id,
+    user: user.id,
   }).populate("category");
 
   if (!expense) {
-    throw new ApiError(httpStatus.NOT_FOUND, "Expense not found");
+    throw new AppError(httpStatus.NOT_FOUND, "Expense not found");
   }
 
   return expense;
 };
 
-const deleteExpense = async (id: string) => {
-  const expense = await Expense.findByIdAndDelete(id).populate("category");
-
-  if (!expense) {
-    throw new ApiError(httpStatus.NOT_FOUND, "Expense not found");
-  }
-
-  return expense;
-};
-
-const getDailyTotal = async (userId: Types.ObjectId, date: Date) => {
-  const startOfDay = new Date(date);
+const getDailyTotal = async (user: JwtPayload) => {
+  const currentDate = new Date();
+  const startOfDay = new Date(currentDate);
   startOfDay.setHours(0, 0, 0, 0);
 
-  const endOfDay = new Date(date);
+  const endOfDay = new Date(currentDate);
   endOfDay.setHours(23, 59, 59, 999);
 
   const result = await Expense.aggregate([
     {
       $match: {
-        userId: new Types.ObjectId(userId),
+        user: new mongoose.Types.ObjectId(user.id),
         date: {
           $gte: startOfDay,
           $lte: endOfDay,
@@ -88,27 +173,86 @@ const getDailyTotal = async (userId: Types.ObjectId, date: Date) => {
       },
     },
     {
+      $lookup: {
+        from: "categories",
+        localField: "category",
+        foreignField: "_id",
+        as: "category",
+      },
+    },
+    {
+      $unwind: "$category",
+    },
+    {
+      $group: {
+        _id: "$category._id",
+        categoryName: { $first: "$category.name" },
+        categoryTotal: { $sum: "$amount" },
+        expenses: {
+          $push: {
+            _id: "$_id",
+            amount: "$amount",
+            purpose: "$purpose",
+            date: "$date",
+          },
+        },
+      },
+    },
+    {
       $group: {
         _id: null,
-        total: { $sum: "$amount" },
+        totalAmount: { $sum: "$categoryTotal" },
+        categories: {
+          $push: {
+            categoryId: "$_id",
+            name: "$categoryName",
+            total: "$categoryTotal",
+            expenses: "$expenses",
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        total: "$totalAmount",
+        categories: 1,
       },
     },
   ]);
 
-  return result.length > 0 ? result[0].total : 0;
+  if (result.length === 0) {
+    return {
+      total: 0,
+      categories: [],
+    };
+  }
+
+  return result[0];
 };
 
-const getCategoryTotal = async (
-  userId: Types.ObjectId,
-  categoryId: Types.ObjectId,
-  startDate: Date,
-  endDate: Date,
-): Promise<number> => {
+const getCategoryTotal = async (user: JwtPayload) => {
+  // Get current month's start and end dates
+  const currentDate = new Date();
+  const startDate = new Date(
+    currentDate.getFullYear(),
+    currentDate.getMonth(),
+    1,
+  );
+  const endDate = new Date(
+    currentDate.getFullYear(),
+    currentDate.getMonth() + 1,
+    0,
+    23,
+    59,
+    59,
+    999,
+  );
+
   const result = await Expense.aggregate([
     {
       $match: {
-        userId: new Types.ObjectId(userId),
-        category: new Types.ObjectId(categoryId),
+        user: new mongoose.Types.ObjectId(user.id),
         date: {
           $gte: startDate,
           $lte: endDate,
@@ -116,22 +260,70 @@ const getCategoryTotal = async (
       },
     },
     {
+      $lookup: {
+        from: "categories",
+        localField: "category",
+        foreignField: "_id",
+        as: "category",
+      },
+    },
+    {
+      $unwind: "$category",
+    },
+    {
+      $group: {
+        _id: "$category._id",
+        categoryName: { $first: "$category.name" },
+        total: { $sum: "$amount" },
+        expenses: {
+          $push: {
+            _id: "$_id",
+            amount: "$amount",
+            purpose: "$purpose",
+            date: "$date",
+          },
+        },
+      },
+    },
+    {
       $group: {
         _id: null,
-        total: { $sum: "$amount" },
+        totalAmount: { $sum: "$total" },
+        categories: {
+          $push: {
+            categoryId: "$_id",
+            name: "$categoryName",
+            total: "$total",
+            expenses: "$expenses",
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        total: "$totalAmount",
+        categories: 1,
       },
     },
   ]);
 
-  return result.length > 0 ? result[0].total : 0;
+  if (result.length === 0) {
+    return {
+      total: 0,
+      categories: [],
+    };
+  }
+
+  return result[0];
 };
 
 export const ExpenseService = {
-  createExpense,
-  getExpenses,
-  getExpenseById,
-  updateExpense,
-  deleteExpense,
+  create,
+  getAll,
+  getOne,
+  updateOne,
+  deleteOne,
   getDailyTotal,
   getCategoryTotal,
 };

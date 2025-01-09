@@ -22,24 +22,21 @@ const create = z.object({
         required_error: "Period is required",
         invalid_type_error: "Period must be monthly, weekly, or daily",
       }),
-      startDate: z
-        .string({
-          required_error: "Start date is required",
-        })
-        .datetime()
-        .optional(),
-      endDate: z.string().datetime().optional(),
     })
     .strict(),
 });
 
 const update = z.object({
+  params: z.object({
+    id: z.string().refine((val) => mongoose.Types.ObjectId.isValid(val), {
+      message: "Invalid Spending Limit ID",
+    }),
+  }),
   body: z
     .object({
       amount: z.number().positive("Amount must be positive").optional(),
       period: z.enum(["monthly", "weekly", "daily"]).optional(),
-      startDate: z.string().datetime().optional(),
-      endDate: z.string().datetime().optional(),
+      status: z.enum(["active", "inactive"]).optional(),
     })
     .strict(),
 });

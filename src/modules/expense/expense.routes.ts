@@ -9,46 +9,36 @@ const router = express.Router();
 router
   .route("/")
   .post(
-    auth(),
-    validateRequest(ExpenseValidation.createExpense),
-    ExpenseController.createExpense,
+    auth("admin", "user"),
+    validateRequest(ExpenseValidation.create),
+    ExpenseController.create,
   )
-  .get(
-    auth(),
-    validateRequest(ExpenseValidation.getExpenses),
-    ExpenseController.getExpenses,
-  );
-
-router
-  .route("/:id")
-  .get(
-    auth(),
-    validateRequest(ExpenseValidation.getExpenseById),
-    ExpenseController.getExpenseById,
-  )
-  .patch(
-    auth(),
-    validateRequest(ExpenseValidation.updateExpense),
-    ExpenseController.updateExpense,
-  )
-  .delete(
-    auth(),
-    validateRequest(ExpenseValidation.deleteExpense),
-    ExpenseController.deleteExpense,
-  );
+  .get(auth("admin", "user"), ExpenseController.getAll);
 
 router.get(
   "/daily-total",
-  auth(),
-  validateRequest(ExpenseValidation.getDailyTotal),
+  auth("admin", "user"),
   ExpenseController.getDailyTotal,
 );
 
 router.get(
   "/category-total",
-  auth(),
-  validateRequest(ExpenseValidation.getCategoryTotal),
+  auth("admin", "user"),
   ExpenseController.getCategoryTotal,
 );
+
+router
+  .route("/:id")
+  .get(auth("admin", "user"), ExpenseController.getOne)
+  .patch(
+    auth("admin", "user"),
+    validateRequest(ExpenseValidation.update),
+    ExpenseController.updateOne,
+  )
+  .delete(
+    auth("admin", "user"),
+
+    ExpenseController.deleteOne,
+  );
 
 export const ExpenseRoutes = router;

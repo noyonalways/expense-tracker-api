@@ -31,22 +31,16 @@ const spendingLimitSchema = new Schema<ISpendingLimit>(
     },
     startDate: {
       type: Date,
-      default: new Date(),
+      required: [true, "Start date is required"],
     },
     endDate: {
       type: Date,
-      default: new Date(new Date().setMonth(new Date().getMonth() + 1)),
+      required: [true, "End date is required"],
     },
   },
   {
     timestamps: true,
   },
-);
-
-// Create a compound index to ensure unique category limits per user
-spendingLimitSchema.index(
-  { user: 1, category: 1, startDate: 1 },
-  { unique: true },
 );
 
 export const SpendingLimit = model<ISpendingLimit>(
