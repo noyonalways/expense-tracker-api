@@ -12,10 +12,18 @@ const app = express();
 
 // middlewares
 app.use(morgan("dev"));
-app.use(cors());
 app.use(
-  helmet(),
+  cors({
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://192.168.1.116:5173",
+      "http://192.168.1.116:3000",
+    ],
+    credentials: true,
+  }),
 );
+app.use(helmet());
 app.use(express.json());
 
 //  server static files
