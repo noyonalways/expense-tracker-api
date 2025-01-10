@@ -15,7 +15,17 @@ const registerUser = async (
     throw new AppError(httpStatus.CONFLICT, "User already exists");
   }
 
-  return User.create(payload);
+  const user = await User.create(payload);
+
+  const jwtPayload = { id: user._id, role: user.role, email: user.email };
+
+  const accessToken = user.createToken(
+    jwtPayload,
+    config.JWT_ACCESS_TOKEN_SECRET as string,
+    config.JWT_ACCESS_TOKEN_EXPIRES_IN as string,
+  );
+
+  return { accessToken };
 };
 
 const loginUser = async (
