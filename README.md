@@ -475,4 +475,4 @@ MIT
 
 ## Author
 
-[Your Name]
+Noyon Rahman
